@@ -52,7 +52,6 @@ def run(
         app = web.Application(middlewares=[error_middleware])
     app["main"] = main
     app["path"] = path
-    app["shutdown_event"] = asyncio.Event()
 
     # Initialize the endpoints for the HTTP server
     try:
@@ -104,6 +103,7 @@ async def main_wrapper(app: web.Application) -> None:
 
 async def shutdown_listener(app: web.Application) -> None:
     """Wait for the 'shutdown_event' notification to kill the process."""
+    app["shutdown_event"] = asyncio.Event()
     try:
         await app["shutdown_event"].wait()
         logging.warning("Shutting down!")
