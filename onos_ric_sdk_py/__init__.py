@@ -52,7 +52,6 @@ def run(
         app = web.Application(middlewares=[error_middleware])
     app["main"] = main
     app["path"] = path
-    app["shutdown_event"] = asyncio.Event()
 
     # Initialize the endpoints for the HTTP server
     try:
@@ -68,52 +67,42 @@ def run(
     setup_swagger(app, ui_version=3)
 
     # Add background tasks
-    app.on_startup.append(on_startup)
-    app.on_cleanup.append(on_cleanup)
+    app.cleanup_ctx.append(run_main)
+    app.cleanup_ctx.append(run_listener)
     web.run_app(app, **server_kwargs)
 
+async def run_main(app):
+    task = asyncio.create_task(app["main"])
 
-async def on_startup(app: web.Application) -> None:
-    """Create the 'main_wrapper_task' and 'shutdown_listener'."""
-    app["shutdown_listener"] = asyncio.create_task(shutdown_listener(app))
-    app["main_wrapper_task"] = asyncio.create_task(main_wrapper(app))
+    yield
 
-
-async def on_cleanup(app: web.Application) -> None:
-    """Cancel the 'shutdown_listener' and 'main_wrapper_task'."""
-    app["shutdown_listener"].cancel()
-    app["main_wrapper_task"].cancel()
-    await app["shutdown_listener"]
-
+    task.cancel()
     try:
-        await app["main_wrapper_task"]
-    except:  # noqa: E722
-        traceback.print_exc(chain=False)
-
-
-async def main_wrapper(app: web.Application) -> None:
-    """Run the 'main' coroutine and set the 'shutdown_event' if it fails."""
-    try:
-        await app["main"]
+        await task  # Ensure any exceptions etc. are raised.
     except asyncio.CancelledError:
         pass
-    except:  # noqa: E722
-        app["shutdown_event"].set()
-        raise
 
+async def run_listener(app):
+    app["shutdown_event"] = asyncio.Event()
+    task = asyncio.create_task(shutdown_listener(app))
+
+    yield
+
+    task.cancel()
+    try:
+        await task  # Ensure any exceptions etc. are raised.
+    except asyncio.CancelledError:
+        pass
 
 async def shutdown_listener(app: web.Application) -> None:
     """Wait for the 'shutdown_event' notification to kill the process."""
-    try:
-        await app["shutdown_event"].wait()
-        logging.warning("Shutting down!")
+    await app["shutdown_event"].wait()
+    logging.warning("Shutting down!")
 
-        # Wait before shutting down
-        await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        os.kill(os.getpid(), signal.SIGTERM)
+    # Wait before shutting down
+    await asyncio.sleep(1)
+
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 __all__ = ["E2Client", "SDLClient", "run"]
